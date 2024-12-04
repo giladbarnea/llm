@@ -1,9 +1,12 @@
 import asyncio
+import re
 import click
 from click_default_group import DefaultGroup
 from dataclasses import asdict
 import io
 import json
+
+from openai import BadRequestError
 from llm import (
     Attachment,
     Collection,
@@ -47,7 +50,6 @@ import textwrap
 from typing import cast, Optional, Iterable, Union, Tuple
 import warnings
 import yaml
-
 warnings.simplefilter("ignore", ResourceWarning)
 
 DEFAULT_TEMPLATE = "prompt: "
@@ -1582,7 +1584,66 @@ def embed_multi(
         embed_kwargs = {"store": store}
         if batch_size:
             embed_kwargs["batch_size"] = batch_size
-        collection_obj.embed_multi(tuples(), **embed_kwargs)
+        try:
+            collection_obj.embed_multi(tuples(), **embed_kwargs)
+        except BadRequestError as e:
+            if getattr(e, "body", {}).get("message", "").startswith("This model's maximum context length is"):
+                                # Extract the maximum context length from the error message
+                max_length = int(re.search(r"maximum context length is (\d+)", e.body["message"]).group(1))
+                
+                # Function to split content into chunks that fit within context
+                def split_content(content: Union[str, bytes], chunk_size: int) -> List[Union[str, bytes]]:
+                    if isinstance(content, bytes):
+                        return [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
+                    return [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
+
+                # Tournament function to get embeddings for large content
+                def tournament_embed(content_tuples: List[Tuple[str, Union[str, bytes]]], 
+                                  round: int = 0) -> List[Tuple[str, Union[str, bytes]]]:
+                    if len(content_tuples) == 0:
+                        return []
+                        
+                    # If all content fits within context, embed directly
+                    try:
+                        collection_obj.embed_multi(content_tuples, **embed_kwargs)
+                        return content_tuples
+                    except BadRequestError as e:
+                        if not getattr(e, "body", {}).get("message", "").startswith(
+                            "This model's maximum context length is"
+                        ):
+                            raise
+
+                    # Split each large content into chunks
+                    chunked_tuples = []
+                    for id_, content in content_tuples:
+                        chunks = split_content(content, max_length)
+                        for i, chunk in enumerate(chunks):
+                            chunk_id = f"{id_}_chunk{i}_round{round}"
+                            chunked_tuples.append((chunk_id, chunk))
+                    
+                    # Recursively embed chunks
+                    tournament_embed(chunked_tuples, round + 1)
+                    
+                    # Get embeddings for chunks and find most representative chunk for each original ID
+                    results = {}
+                    for original_id, _ in content_tuples:
+                        chunk_results = collection_obj.similar(
+                            original_id + "_chunk0_round" + str(round), 
+                            len(chunks)
+                        )
+                        best_chunk_id = max(chunk_results, key=lambda x: x.score).id
+                        results[original_id] = collection_obj.get_content(best_chunk_id)
+                    
+                    # Clean up temporary chunk embeddings
+                    collection_obj.delete_ids([t[0] for t in chunked_tuples])
+                    
+                    # Return winning chunks
+                    return [(id_, content) for id_, content in content_tuples]
+
+                # Run the tournament
+                click.echo("Input exceeds model context length, running recursive embedding...", err=True)
+                return tournament_embed(list(tuples()))
+            raise
 
 
 @cli.command()
