@@ -49,61 +49,37 @@ def run_llm_command(root_dir, run_uv_command):
 
 
 def test_llm_smoke_test(run_llm_command):
-    """
-    Smoke test for the CLI - verify that running 'uv run bin/llm' with no arguments
-    returns a string and 0 status code.
-    """
+    """Verify that running 'uv run bin/llm' with no arguments works correctly."""
     result = run_llm_command()
 
-    # Check that the command returned a 0 status code
     assert result.returncode == 0
-
-    # Check that the command returned some output
     assert result.stdout.strip() != ""
 
 
 def test_llm_with_help_argument(run_llm_command):
-    """
-    Test that running 'uv run bin/llm --help' returns help text and 0 status code.
-    """
+    """Verify that --help returns appropriate help text."""
     result = run_llm_command("--help")
 
-    # Check that the command returned a 0 status code
     assert result.returncode == 0
-
-    # Check that the command returned some output
     assert result.stdout.strip() != ""
-
-    # Check that the output contains help text
     assert "Usage:" in result.stdout
     assert "Options" in result.stdout
     assert "Commands" in result.stdout
 
 
 def test_llm_with_invalid_argument(run_llm_command):
-    """
-    Test that running 'uv run bin/llm' with an invalid argument returns a non-zero status code.
-    """
+    """Verify that invalid arguments are properly rejected."""
     result = run_llm_command("--invalid-argument")
 
-    # Check that the command returned a non-zero status code
     assert result.returncode != 0
-
-    # Check that the command returned an error message
     assert result.stderr.strip() != ""
 
 
 def test_llm_prompt_command(run_llm_command):
-    """
-    Test that running 'uv run bin/llm prompt' with a simple text input
-    returns a 0 status code.
-    """
+    """Test the basic prompt command functionality."""
     result = run_llm_command(["prompt", "hi"])
 
-    # Check that the command returned a 0 status code
     assert result.returncode == 0
-
-    # Check that the command returned some output
     assert result.stdout.strip() != ""
 
 
@@ -176,7 +152,6 @@ def test_llm_with_md_option(run_llm_command):
     assert result.returncode == 0
     assert result.stdout.strip() != ""
 
-    # Check for ANSI color codes which indicate rich formatting
     ansi_color_pattern = re.compile(r"\x1b\[\d+(;\d+)*m")
     assert ansi_color_pattern.search(result.stdout) is not None
 
@@ -194,6 +169,5 @@ def test_llm_with_no_md_option(run_llm_command):
     assert result.returncode == 0
     assert result.stdout.strip() != ""
 
-    # Check for absence of ANSI color codes
     ansi_color_pattern = re.compile(r"\x1b\[\d+(;\d+)*m")
     assert ansi_color_pattern.search(result.stdout) is None
