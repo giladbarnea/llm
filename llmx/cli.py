@@ -8,12 +8,11 @@ import sys
 import tempfile
 from typing import Any, Dict, List, Optional
 
-# Import the llm library
-import llm
 import typer
 from rich.console import Console
 from rich.markdown import Markdown
 
+import llm
 from llmx.templates import TemplateManager
 
 # Create Typer app
@@ -42,10 +41,9 @@ SUBCOMMANDS_SUPPORTING_TEMPERATURE = ["prompt", "chat"]
 SUBCOMMANDS_SUPPORTING_MODEL_OPTION = ["prompt", "chat"]
 
 # Import the remaining modules
-from llmx.utils import format_piped_content, get_piped_content
-
 # Import other commands
 from llmx.commands import app as commands_app
+from llmx.utils import format_piped_content, get_piped_content
 
 
 @app.callback(invoke_without_command=True)

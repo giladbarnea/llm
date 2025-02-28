@@ -8,10 +8,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import llm
 import yaml
-from llm.templates import Template
 from rich.console import Console
+
+import llm
+from llm.templates import Template
 
 console = Console()
 

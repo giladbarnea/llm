@@ -3,7 +3,6 @@ Tests for the CLI entry point.
 """
 
 import subprocess
-import sys
 from pathlib import Path
 
 
