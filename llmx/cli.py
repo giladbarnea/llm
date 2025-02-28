@@ -42,7 +42,7 @@ SUBCOMMANDS_SUPPORTING_TEMPERATURE = ["prompt", "chat"]
 SUBCOMMANDS_SUPPORTING_MODEL_OPTION = ["prompt", "chat"]
 
 # Import the remaining modules
-from llm.utils import format_piped_content, get_piped_content
+from llmx.utils import format_piped_content, get_piped_content
 
 # Import other commands
 from llmx.commands import app as commands_app
@@ -77,11 +77,6 @@ def main(
     """
     Enhanced wrapper for simonw/llm with sane defaults, better content handling, and rich output.
     """
-    # Skip if --help was passed
-    if ctx.invoked_subcommand is None and not sys.argv[1:]:
-        ctx.invoke(prompt)
-        return
-
     # Set up context object if not already done
     if ctx.obj is None:
         ctx.obj = {}
@@ -100,6 +95,11 @@ def main(
         }
     )
 
+    # Skip if --help was passed
+    if ctx.invoked_subcommand is None and not sys.argv[1:]:
+        ctx.invoke(prompt, ctx=ctx)
+        return
+
 
 def build_llm_params(
     subcommand: str,
@@ -114,7 +114,10 @@ def build_llm_params(
     params = {}
 
     # Handle prompt content
-    prompt_content = " ".join(args) if args else ""
+    if args and isinstance(args, list):
+        prompt_content = " ".join(args) if args else ""
+    else:
+        prompt_content = ""
     if piped_content:
         # If we have piped content and prompt content, use the prompt content normally
         # and add the piped content to the prompt
@@ -126,7 +129,11 @@ def build_llm_params(
     params["prompt"] = prompt_content
 
     # Handle system prompt
-    if subcommand in SUBCOMMANDS_SUPPORTING_SYSTEM_OPTION and ctx_obj.get("system"):
+    if (
+        subcommand in SUBCOMMANDS_SUPPORTING_SYSTEM_OPTION
+        and ctx_obj
+        and ctx_obj.get("system")
+    ):
         # If it's a template reference, resolve it
         if ctx_obj["system"] in template_mgr.list_templates():
             system_prompt = template_mgr.get_template_content(ctx_obj["system"])
@@ -137,6 +144,7 @@ def build_llm_params(
     # Handle temperature
     if (
         subcommand in SUBCOMMANDS_SUPPORTING_TEMPERATURE
+        and ctx_obj
         and ctx_obj.get("temperature") is not None
     ):
         params["temperature"] = ctx_obj["temperature"]
@@ -145,7 +153,11 @@ def build_llm_params(
 
     # Handle model name (returned separately)
     model_name = DEFAULT_MODEL
-    if subcommand in SUBCOMMANDS_SUPPORTING_MODEL_OPTION and ctx_obj.get("model"):
+    if (
+        subcommand in SUBCOMMANDS_SUPPORTING_MODEL_OPTION
+        and ctx_obj
+        and ctx_obj.get("model")
+    ):
         model_name = ctx_obj["model"]
 
     return params, model_name

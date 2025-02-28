@@ -4,4 +4,4 @@ globs:
 alwaysApply: false
 ---
 Since the project uses `uv`, you can use `uv run <executable>` and `uv run python` to test the functionality of your changes and get feedback.
-You can run anything you'd like.
+A smoke test that should be used liberally is `uv run bin/llm`.
