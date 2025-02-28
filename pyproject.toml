@@ -3,5 +3,6 @@ name = "llm"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
+    "rich>=13.9.4",
     "typer>=0.15.2",
 ]
