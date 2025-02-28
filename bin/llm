@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""
+Command-line entry point for the LLM wrapper.
+"""
+
+from llm.cli import run
+
+if __name__ == "__main__":
+    run()
