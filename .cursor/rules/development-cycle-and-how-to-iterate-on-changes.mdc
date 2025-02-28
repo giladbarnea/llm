@@ -1,0 +1,7 @@
+---
+description: How to iterate and test changes through the development cycle
+globs: 
+alwaysApply: false
+---
+Since the project uses `uv`, you can use `uv run <executable>` and `uv run python` to test the functionality of your changes and get feedback.
+You can run anything you'd like.
