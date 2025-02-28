@@ -3,15 +3,14 @@ Template management for the LLM CLI.
 """
 
 import os
-import re
 import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Import llm for template handling
 import llm
 import yaml
+from llm.templates import Template
 from rich.console import Console
 
 console = Console()
@@ -63,7 +62,7 @@ class TemplateManager:
         """
         List available templates.
         """
-        # Get system templates
+        # Get system templates using llm API
         system_templates = llm.get_templates()
 
         # Get user templates
@@ -106,7 +105,7 @@ class TemplateManager:
         Get the content of a template by name.
         If raw is True, returns the raw YAML content, otherwise returns the prompt.
         """
-        # If it's a system template, try to get it from llm
+        # Use llm.get_template which handles both system and user templates
         try:
             content = llm.get_template(template_name)
             if content:
@@ -126,25 +125,6 @@ class TemplateManager:
                     return content
         except Exception:
             pass
-
-        # Try user template
-        template_path = self.templates_path / f"{template_name}.yaml"
-        if template_path.exists():
-            content = template_path.read_text()
-            if raw:
-                return content
-
-            # Parse the YAML and extract the prompt
-            try:
-                template_data = yaml.safe_load(content)
-                if template_data and "prompt" in template_data:
-                    return template_data["prompt"]
-                else:
-                    # If no prompt field, return the entire content
-                    return content
-            except yaml.YAMLError:
-                # If not valid YAML, return as is
-                return content
 
         # If template not found
         raise ValueError(f"Template '{template_name}' not found")
@@ -181,24 +161,29 @@ class TemplateManager:
         self, template_content: str, variables: Dict[str, Any] = None
     ) -> str:
         """
-        Interpolate variables in a template.
+        Interpolate variables in a template using llm.templates.Template.
         """
         if not variables:
             return template_content
 
-        result = template_content
+        # Create a Template instance
+        template = Template(
+            name="temp",  # Temporary name
+            prompt=template_content,  # Use the content as prompt
+        )
 
-        # Replace variables in format {variable_name}
-        pattern = r"(\{([a-zA-Z0-9_]+)\})"
-        matches = re.findall(pattern, template_content)
-
-        for full_match, var_name in matches:
-            if var_name in variables:
-                # Convert variable value to string if needed
-                var_value = str(variables[var_name])
-                result = result.replace(full_match, var_value)
-
-        return result
+        try:
+            # Use Template.interpolate to handle variable substitution
+            interpolated_prompt, _ = template.evaluate("", variables)
+            return interpolated_prompt or template_content
+        except Template.MissingVariables:
+            # If variables are missing, return the original content
+            return template_content
+        except Exception as e:
+            console.print(
+                f"[yellow]Warning:[/yellow] Error interpolating variables: {e}"
+            )
+            return template_content
 
     def create_template(self, name: str, content: str) -> Path:
         """
@@ -217,7 +202,9 @@ class TemplateManager:
             template_path.write_text(content)
         else:
             # Wrap content in YAML format
-            yaml_content = f"prompt: |\n  {content.replace('\n', '\n  ')}"
+            newline_indent = "\n  "
+            simple_newline = "\n"
+            yaml_content = f"prompt: |{newline_indent}{content.replace(simple_newline, newline_indent)}"
             template_path.write_text(yaml_content)
 
         return template_path

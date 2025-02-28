@@ -11,9 +11,10 @@ from typing import Any, Dict, List, Optional
 # Import the llm library
 import llm
 import typer
-from llm.templates import TemplateManager
 from rich.console import Console
 from rich.markdown import Markdown
+
+from llmx.templates import TemplateManager
 
 # Create Typer app
 app = typer.Typer(

@@ -7,9 +7,10 @@ from typing import List, Optional
 
 import llm
 import typer
-from llm.templates import TemplateManager
 from rich.console import Console
 from rich.markdown import Markdown
+
+from llmx.templates import TemplateManager
 
 app = typer.Typer(help="Additional helper commands for specific templates and models")
 console = Console()
