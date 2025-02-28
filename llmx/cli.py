@@ -40,8 +40,7 @@ SUBCOMMANDS_SUPPORTING_TEMPLATE_OPTION = ["prompt", "chat"]
 SUBCOMMANDS_SUPPORTING_TEMPERATURE = ["prompt", "chat"]
 SUBCOMMANDS_SUPPORTING_MODEL_OPTION = ["prompt", "chat"]
 
-# Import the remaining modules
-# Import other commands
+
 from llmx.commands import app as commands_app
 from llmx.utils import format_piped_content, get_piped_content
 
