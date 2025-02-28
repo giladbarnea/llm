@@ -8,17 +8,12 @@ import sys
 import tempfile
 from typing import Any, Dict, List, Optional
 
-# Import the llm-core library as llm_core
-import llm_core
+# Import the llm library
+import llm
 import typer
-from llm_core import (
-    list_templates as llm_list_templates,
-)
+from llm.templates import TemplateManager
 from rich.console import Console
 from rich.markdown import Markdown
-
-from llm.templates import TemplateManager
-from llm.utils import format_piped_content, get_piped_content
 
 # Create Typer app
 app = typer.Typer(
@@ -29,25 +24,27 @@ console = Console()
 
 # Default values
 DEFAULT_TEMPERATURE = 0
-DEFAULT_TEMPLATE = "claude"
-DEFAULT_MODEL = "anthropic/claude-3-7-sonnet-latest"
+DEFAULT_MODEL = "gpt-4o-mini"
 
-# Mapping of subcommands to supported features
-SUBCOMMANDS_SUPPORTING_TEMPERATURE = ["prompt", "chat"]
-SUBCOMMANDS_SUPPORTING_MARKDOWN = ["prompt"]
-SUBCOMMANDS_SUPPORTING_PIPED_CONTENT = ["prompt"]
-SUBCOMMANDS_SUPPORTING_SYSTEM_OPTION = ["chat", "prompt", "cmd"]
+# User path for templates (same as from llm)
+USER_PATH = os.environ.get("LLM_USER_PATH") or os.path.join(
+    os.path.expanduser("~"),
+    "Library/Application Support/io.datasette.llm"
+    if sys.platform == "darwin"
+    else ".local/share/io.datasette.llm",
+)
+
+# Subcommands that support various options
+SUBCOMMANDS_SUPPORTING_SYSTEM_OPTION = ["prompt", "chat"]
 SUBCOMMANDS_SUPPORTING_TEMPLATE_OPTION = ["prompt", "chat"]
-SUBCOMMANDS_SUPPORTING_MODEL_OPTION = ["prompt", "chat", "cmd"]
+SUBCOMMANDS_SUPPORTING_TEMPERATURE = ["prompt", "chat"]
+SUBCOMMANDS_SUPPORTING_MODEL_OPTION = ["prompt", "chat"]
 
+# Import the remaining modules
+from llm.utils import format_piped_content, get_piped_content
 
-def get_piped_content() -> Optional[str]:
-    """
-    Check if content is being piped in and return it if so.
-    """
-    if not sys.stdin.isatty():
-        return sys.stdin.read()
-    return None
+# Import other commands
+from llmx.commands import app as commands_app
 
 
 @app.callback(invoke_without_command=True)
@@ -77,54 +74,55 @@ def main(
     ),
 ):
     """
-    Enhanced wrapper for simonw/llm with sane defaults and improved output handling.
+    Enhanced wrapper for simonw/llm with sane defaults, better content handling, and rich output.
     """
-    # If no subcommand is provided, default to 'prompt'
-    if ctx.invoked_subcommand is None:
-        # Save original args for later
-        original_args = list(sys.argv[1:])
-
-        # Replace the command with 'llm prompt' and re-run
-        sys.argv = [sys.argv[0], "prompt"] + original_args
-        app()
+    # Skip if --help was passed
+    if ctx.invoked_subcommand is None and not sys.argv[1:]:
+        ctx.invoke(prompt)
         return
 
-    # Store options in the context for subcommands to use
-    ctx.obj = {
-        "temperature": temperature,
-        "template": template,
-        "model": model,
-        "system": system,
-        "format_stdin": format_stdin,
-        "md": md,
-        "inline_code_lexer": inline_code_lexer,
-        "stdin_tag": stdin_tag,
-    }
+    # Set up context object if not already done
+    if ctx.obj is None:
+        ctx.obj = {}
+
+    # Store options in context
+    ctx.obj.update(
+        {
+            "temperature": temperature,
+            "template": template,
+            "model": model,
+            "system": system,
+            "format_stdin": format_stdin,
+            "md": md,
+            "inline_code_lexer": inline_code_lexer,
+            "stdin_tag": stdin_tag,
+        }
+    )
 
 
-def build_llm_command(
+def build_llm_params(
     subcommand: str,
     ctx_obj: Dict[str, Any],
     args: List[str],
     piped_content: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Construct the llm command parameters using the llm-core API.
-    Returns a dictionary of parameters to pass to the llm-core API.
+    Build parameters for llm API calls.
     """
     template_mgr = TemplateManager()
-    params = {
-        "subcommand": subcommand,
-        "args": args,
-    }
+    params = {}
 
-    # Handle template (if no system prompt is provided)
-    if (
-        subcommand in SUBCOMMANDS_SUPPORTING_TEMPLATE_OPTION
-        and ctx_obj.get("template")
-        and not ctx_obj.get("system")
-    ):
-        params["template"] = ctx_obj["template"]
+    # Handle prompt content
+    prompt_content = " ".join(args) if args else ""
+    if piped_content:
+        # If we have piped content and prompt content, use the prompt content normally
+        # and add the piped content to the prompt
+        if prompt_content:
+            prompt_content = f"{prompt_content}\n\n{piped_content}"
+        else:
+            prompt_content = piped_content
+
+    params["prompt"] = prompt_content
 
     # Handle system prompt
     if subcommand in SUBCOMMANDS_SUPPORTING_SYSTEM_OPTION and ctx_obj.get("system"):
@@ -140,21 +138,16 @@ def build_llm_command(
         subcommand in SUBCOMMANDS_SUPPORTING_TEMPERATURE
         and ctx_obj.get("temperature") is not None
     ):
-        params["options"] = {"temperature": ctx_obj["temperature"]}
+        params["temperature"] = ctx_obj["temperature"]
     elif subcommand in SUBCOMMANDS_SUPPORTING_TEMPERATURE:
-        params["options"] = {"temperature": DEFAULT_TEMPERATURE}
+        params["temperature"] = DEFAULT_TEMPERATURE
 
-    # Handle model
+    # Handle model name (returned separately)
+    model_name = DEFAULT_MODEL
     if subcommand in SUBCOMMANDS_SUPPORTING_MODEL_OPTION and ctx_obj.get("model"):
-        params["model"] = ctx_obj["model"]
-    elif subcommand in SUBCOMMANDS_SUPPORTING_MODEL_OPTION:
-        params["model"] = DEFAULT_MODEL
+        model_name = ctx_obj["model"]
 
-    # Handle piped content
-    if piped_content:
-        params["content"] = piped_content
-
-    return params
+    return params, model_name
 
 
 @app.command()
@@ -179,23 +172,21 @@ def prompt(
     # Create temporary file for output
     with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
         # Build llm params and call API
-        params = build_llm_command("prompt", ctx.obj, prompt_text, piped_content)
+        params, model_name = build_llm_params(
+            "prompt", ctx.obj, prompt_text, piped_content
+        )
 
-        # Use the llm-core API instead of subprocess
+        # Use the llm API
         try:
-            result = llm_core.run_llm_command(**params)
+            model = llm.get_model(model_name)
+            response = model.prompt(**params)
+            result = response.text()
             tmp.write(result)
             tmp.close()
 
             # Handle markdown display
             if ctx.obj.get("md", True):
-                with open(tmp.name, "r") as f:
-                    content = f.read()
-                md = Markdown(
-                    content,
-                    code_theme="monokai",
-                    inline_code_lexer=ctx.obj.get("inline_code_lexer", "python"),
-                )
+                md = Markdown(result, code_theme="monokai")
                 console.print(md)
             else:
                 with open(tmp.name, "r") as f:
@@ -205,7 +196,10 @@ def prompt(
             sys.exit(1)
         finally:
             # Clean up temp file
-            os.unlink(tmp.name)
+            try:
+                os.unlink(tmp.name)
+            except:
+                pass
 
 
 @app.command()
@@ -214,7 +208,7 @@ def chat(
     message: List[str] = typer.Argument(None, help="Chat message"),
 ):
     """
-    Start or continue a chat session with the LLM.
+    Start an interactive chat with the selected model.
     """
     # Get piped content and format it if needed
     raw_piped_content = get_piped_content()
@@ -227,22 +221,64 @@ def chat(
     elif raw_piped_content:
         piped_content = raw_piped_content
 
-    params = build_llm_command("chat", ctx.obj, message, piped_content)
+    # Build llm params and prepare for chat
+    params, model_name = build_llm_params("chat", ctx.obj, message, piped_content)
 
-    # Use the llm-core API
+    # If there's an initial message, send it first
     try:
-        result = llm_core.run_llm_command(**params)
+        model = llm.get_model(model_name)
 
-        # Handle markdown display
-        if ctx.obj.get("md", True):
-            md = Markdown(
-                result,
-                code_theme="monokai",
-                inline_code_lexer=ctx.obj.get("inline_code_lexer", "python"),
+        # Create a conversation
+        conversation = None
+        if params.get("prompt"):
+            # Send the initial message
+            response = model.prompt(
+                params["prompt"],
+                system=params.get("system"),
+                temperature=params.get("temperature", DEFAULT_TEMPERATURE),
             )
-            console.print(md)
-        else:
-            sys.stdout.write(result)
+            result = response.text()
+
+            # Display response
+            if ctx.obj.get("md", True):
+                md = Markdown(result, code_theme="monokai")
+                console.print(md)
+            else:
+                sys.stdout.write(result)
+
+            # Get the conversation ID for continuation
+            conversation = response.response.conversation
+
+        # Run the interactive chat
+        console.print(
+            "\nEntering interactive chat mode. Type 'exit' or 'quit' to exit."
+        )
+        console.print("Type '!multi' to enter multiple lines, then '!end' to finish")
+
+        # Interactive chat loop
+        while True:
+            user_input = input("> ")
+            if user_input.lower() in ["exit", "quit"]:
+                break
+
+            # Call the API with input
+            response = model.prompt(
+                user_input,
+                system=params.get("system"),
+                temperature=params.get("temperature", DEFAULT_TEMPERATURE),
+                conversation=conversation,
+            )
+            result = response.text()
+
+            # Update conversation ID for continuation
+            conversation = response.response.conversation
+
+            # Display response
+            if ctx.obj.get("md", True):
+                md = Markdown(result, code_theme="monokai")
+                console.print(md)
+            else:
+                sys.stdout.write(result)
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {str(e)}")
         sys.exit(1)
@@ -254,30 +290,37 @@ def cmd(
     command: List[str] = typer.Argument(None, help="Command to execute"),
 ):
     """
-    Execute a shell command and send its output to the LLM.
+    Execute a command and pass the output to the LLM for analysis.
     """
-    # This function still uses subprocess to run the shell command
-    # but uses llm-core API for the LLM interaction
-    result = subprocess.run(
-        " ".join(command), shell=True, capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        console.print(f"[bold red]Command error:[/bold red] {result.stderr}")
-        sys.exit(result.returncode)
+    if not command:
+        console.print("[bold red]Error:[/bold red] No command provided")
+        sys.exit(1)
 
-    # Send command output to LLM
-    params = build_llm_command("prompt", ctx.obj, [], result.stdout)
-
+    # Execute the command and get the output
     try:
-        llm_result = llm_core.run_llm_command(**params)
+        result = subprocess.run(
+            " ".join(command), shell=True, capture_output=True, text=True
+        )
 
-        # Handle markdown display
+        if result.returncode != 0:
+            console.print(f"[bold red]Command error:[/bold red] {result.stderr}")
+            sys.exit(result.returncode)
+
+        # Build the LLM params and get the model name
+        params, model_name = build_llm_params("prompt", ctx.obj, [], result.stdout)
+
+        # Call the LLM API
+        model = llm.get_model(model_name)
+        response = model.prompt(
+            params["prompt"],
+            system=params.get("system"),
+            temperature=params.get("temperature", DEFAULT_TEMPERATURE),
+        )
+        llm_result = response.text()
+
+        # Display the result
         if ctx.obj.get("md", True):
-            md = Markdown(
-                llm_result,
-                code_theme="monokai",
-                inline_code_lexer=ctx.obj.get("inline_code_lexer", "python"),
-            )
+            md = Markdown(llm_result, code_theme="monokai")
             console.print(md)
         else:
             sys.stdout.write(llm_result)
@@ -292,25 +335,23 @@ def templates():
     List available templates.
     """
     template_mgr = TemplateManager()
-    console.print("[bold]Local Templates:[/bold]")
-    for template in template_mgr.list_templates():
-        console.print(f"  • {template}")
+    templates = template_mgr.list_templates()
 
-    console.print("\n[bold]System Templates:[/bold]")
-    for template in llm_list_templates():
-        console.print(f"  • {template}")
+    if not templates:
+        console.print("No templates found.")
+        return
+
+    console.print("Available templates:")
+    for template in sorted(templates):
+        console.print(f"  - {template}")
+
+
+# Add subcommands
+app.add_typer(commands_app, name="cmd")
 
 
 def run():
     """
     Entry point for the CLI.
     """
-    # Register shell completion if needed
-    try:
-        import click_completion
-
-        click_completion.init()
-    except ImportError:
-        pass  # Optional dependency
-
     app()

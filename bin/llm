@@ -3,7 +3,7 @@
 Command-line entry point for the LLM wrapper.
 """
 
-from llm.cli import run
+from llmx.cli import run
 
 if __name__ == "__main__":
     run()

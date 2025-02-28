@@ -5,12 +5,11 @@ Convenience commands for specific templates and models.
 import sys
 from typing import List, Optional
 
-import llm_core
+import llm
 import typer
+from llm.templates import TemplateManager
 from rich.console import Console
 from rich.markdown import Markdown
-
-from llm.templates import TemplateManager
 
 app = typer.Typer(help="Additional helper commands for specific templates and models")
 console = Console()
@@ -30,15 +29,13 @@ def simplify(
     simplify_template = template_mgr.get_template_content("simplify")
     merged_content = f"{claude_template}\n\n{simplify_template}"
 
-    # Run the prompt using llm_core
+    # Run the prompt using llm
     try:
-        result = llm_core.run_llm_command(
-            subcommand="prompt",
-            args=text,
-            system=merged_content,
-            model="anthropic/claude-3-sonnet-20240229",
-            options={"temperature": 0},
+        model = llm.get_model("anthropic/claude-3-sonnet-20240229")
+        response = model.prompt(
+            " ".join(text) if text else "", system=merged_content, temperature=0
         )
+        result = response.text()
 
         # Display the result
         if ctx.obj and ctx.obj.get("md", True):
@@ -62,15 +59,13 @@ def zshclaude(
     # Get the zshclaude template
     system_prompt = template_mgr.get_template_content("zshclaude")
 
-    # Run the prompt using llm_core
+    # Run the prompt using llm
     try:
-        result = llm_core.run_llm_command(
-            subcommand="prompt",
-            args=prompt,
-            system=system_prompt,
-            model="anthropic/claude-3-sonnet-20240229",
-            options={"temperature": 0},
+        model = llm.get_model("anthropic/claude-3-sonnet-20240229")
+        response = model.prompt(
+            " ".join(prompt) if prompt else "", system=system_prompt, temperature=0
         )
+        result = response.text()
 
         # Display the result
         if ctx.obj and ctx.obj.get("md", True):
@@ -96,7 +91,7 @@ def zshcmd(
     system_prompt = template_mgr.get_template_content("zshcmd")
 
     # Use the specified model or default
-    model_to_use = model or "anthropic/claude-3-sonnet-20240229"
+    model_name = model or "anthropic/claude-3-sonnet-20240229"
 
     # Execute the command and get the output
     import subprocess
@@ -109,16 +104,11 @@ def zshcmd(
         console.print(f"[bold red]Command error:[/bold red] {result.stderr}")
         sys.exit(result.returncode)
 
-    # Run the prompt with the command output using llm_core
+    # Run the prompt with the command output using llm
     try:
-        llm_result = llm_core.run_llm_command(
-            subcommand="prompt",
-            args=[],
-            content=result.stdout,
-            system=system_prompt,
-            model=model_to_use,
-            options={"temperature": 0},
-        )
+        llm_model = llm.get_model(model_name)
+        response = llm_model.prompt(result.stdout, system=system_prompt, temperature=0)
+        llm_result = response.text()
 
         # Display the result
         if ctx.obj and ctx.obj.get("md", True):
@@ -142,15 +132,13 @@ def pyclaude(
     # Get the pyclaude template
     template_content = template_mgr.get_template_content("pyclaude")
 
-    # Run the prompt using llm_core
+    # Run the prompt using llm
     try:
-        result = llm_core.run_llm_command(
-            subcommand="prompt",
-            args=prompt,
-            system=template_content,
-            model="anthropic/claude-3-sonnet-20240229",
-            options={"temperature": 0},
+        model = llm.get_model("anthropic/claude-3-sonnet-20240229")
+        response = model.prompt(
+            " ".join(prompt) if prompt else "", system=template_content, temperature=0
         )
+        result = response.text()
 
         # Display the result
         if ctx.obj and ctx.obj.get("md", True):

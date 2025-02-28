@@ -4,8 +4,8 @@ Main entry point for the LLM CLI.
 
 import typer
 
-from llm.cli import app as main_app
-from llm.commands import app as commands_app
+from llmx.cli import app as main_app
+from llmx.commands import app as commands_app
 
 # Combine the apps
 app = typer.Typer(help="Enhanced wrapper for simonw/llm")

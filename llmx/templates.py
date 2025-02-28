@@ -9,11 +9,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Import llm_core for template handling
-import llm_core
+# Import llm for template handling
+import llm
 import yaml
-from llm_core import get_template_dir as llm_get_template_dir
-from llm_core import list_templates as llm_list_templates
 from rich.console import Console
 
 console = Console()
@@ -34,205 +32,192 @@ class TemplateManager:
         """
         Get the path to the templates directory.
         """
-        # Try to get the templates path using llm_core
+        # Try to get the templates path using llm
         try:
-            template_dir = llm_get_template_dir()
-            return Path(template_dir)
+            # The llm library uses llm.user_dir() to get the base user directory
+            base_dir = llm.user_dir()
+            templates_path = base_dir / "templates"
+            if not templates_path.exists():
+                templates_path.mkdir(parents=True, exist_ok=True)
+            return templates_path
         except Exception as e:
             console.print(
-                f"[yellow]Warning:[/yellow] Could not get templates path from llm_core: {e}"
+                f"[yellow]Warning:[/yellow] Could not get templates path from llm: {e}"
             )
-
-            # Fallback to default locations
-            # Check if it's in the standard location first
-            user_data_dir = Path.home() / ".local" / "share"
-            if os.name == "nt":  # Windows
-                user_data_dir = Path(
-                    os.environ.get("APPDATA", str(Path.home() / "AppData" / "Roaming"))
+            # Fallback to standard location
+            user_home = Path.home()
+            if os.name == "posix":  # Linux/Mac
+                base_path = user_home / (
+                    "Library/Application Support/io.datasette.llm"
+                    if os.uname().sysname == "Darwin"
+                    else ".local/share/io.datasette.llm"
                 )
+            else:  # Windows
+                base_path = user_home / "AppData/Local/io.datasette.llm"
 
-            default_path = user_data_dir / "io.datasette.llm" / "templates"
-            if default_path.exists():
-                return default_path
-
-            # Create the directory if it doesn't exist
-            default_path.mkdir(parents=True, exist_ok=True)
-            return default_path
+            templates_path = base_path / "templates"
+            templates_path.mkdir(parents=True, exist_ok=True)
+            return templates_path
 
     def list_templates(self) -> List[str]:
         """
         List available templates.
         """
-        # Get both system and local templates
-        local_templates = [p.stem for p in self.templates_path.glob("*.yaml")]
-        return sorted(local_templates)
+        # Get system templates
+        system_templates = llm.get_templates()
+
+        # Get user templates
+        user_templates = []
+        if self.templates_path.exists():
+            user_templates = [f.stem for f in self.templates_path.glob("*.yaml")]
+
+        # Combine and deduplicate
+        all_templates = list(set(system_templates + user_templates))
+        return sorted(all_templates)
 
     def get_template_path(self, template_name: str) -> Optional[Path]:
         """
-        Get the path to a template.
+        Get the path to a template file.
+        Returns None if not found.
         """
-        # Check if it's a file path
-        if Path(template_name).exists() and Path(template_name).is_file():
-            return Path(template_name)
-
-        # Check if it's a template name
+        # Check user templates first
         template_path = self.templates_path / f"{template_name}.yaml"
         if template_path.exists():
             return template_path
 
-        # Check if it's a template name without .yaml extension
-        if not template_name.endswith(".yaml"):
-            template_path = self.templates_path / f"{template_name}"
-            if template_path.exists():
-                return template_path
+        # If not found, try to get it from llm system templates
+        try:
+            template_content = llm.get_template(template_name)
+            if template_content:
+                # Create a temporary file for the template
+                fd, temp_path = tempfile.mkstemp(suffix=".yaml")
+                os.close(fd)
+                temp_path = Path(temp_path)
+                temp_path.write_text(template_content)
+                self._schedule_deletion(temp_path)
+                return temp_path
+        except Exception:
+            pass
 
         return None
 
     def get_template_content(self, template_name: str, raw: bool = False) -> str:
         """
-        Get the content of a template.
-
-        Args:
-            template_name: The name of the template or a path to a template file
-            raw: If True, return the raw template content without processing
-
-        Returns:
-            The template content
+        Get the content of a template by name.
+        If raw is True, returns the raw YAML content, otherwise returns the prompt.
         """
-        # If it's a system template, try to get it from llm_core
+        # If it's a system template, try to get it from llm
         try:
-            if template_name in llm_list_templates():
-                return llm_core.get_template(template_name)
+            content = llm.get_template(template_name)
+            if content:
+                if raw:
+                    return content
+
+                # Parse the YAML and extract the prompt
+                try:
+                    template_data = yaml.safe_load(content)
+                    if template_data and "prompt" in template_data:
+                        return template_data["prompt"]
+                    else:
+                        # If no prompt field, return the entire content
+                        return content
+                except yaml.YAMLError:
+                    # If not valid YAML, return as is
+                    return content
         except Exception:
-            pass  # Fall back to local handling
+            pass
 
-        # Try to get the template from our local collection
-        template_path = self.get_template_path(template_name)
-        if not template_path:
-            raise ValueError(f"Template not found: {template_name}")
-
-        with open(template_path, "r") as f:
-            content = f.read()
-
-        if raw:
-            return content
-
-        # Process the template content
-        try:
-            yaml_content = yaml.safe_load(content)
-            if not isinstance(yaml_content, dict):
+        # Try user template
+        template_path = self.templates_path / f"{template_name}.yaml"
+        if template_path.exists():
+            content = template_path.read_text()
+            if raw:
                 return content
 
-            # Get the prompt from the YAML
-            prompt = yaml_content.get("prompt", "")
-            if not prompt:
-                # Fall back to using the entire content
+            # Parse the YAML and extract the prompt
+            try:
+                template_data = yaml.safe_load(content)
+                if template_data and "prompt" in template_data:
+                    return template_data["prompt"]
+                else:
+                    # If no prompt field, return the entire content
+                    return content
+            except yaml.YAMLError:
+                # If not valid YAML, return as is
                 return content
 
-            return prompt
-        except yaml.YAMLError:
-            # If it's not valid YAML, return the content as is
-            return content
+        # If template not found
+        raise ValueError(f"Template '{template_name}' not found")
 
     def merge_templates(self, template1: str, template2: str) -> str:
         """
-        Merge two templates and return the result.
-
-        Args:
-            template1: The first template (name or content)
-            template2: The second template (name or content)
-
-        Returns:
-            The merged template content
+        Merge two templates by combining their prompts.
         """
-        # Get template content
         content1 = self.get_template_content(template1)
         content2 = self.get_template_content(template2)
-
-        # Create a temporary file with the merged content
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as tmp:
-            merged_content = f"{content1}\n\n{content2}"
-            tmp.write(merged_content)
-            tmp_path = Path(tmp.name)
-
-        # Schedule deletion for later (to allow the command to use the file)
-        self._schedule_deletion(tmp_path)
-
-        return str(tmp_path)
+        return f"{content1}\n\n{content2}"
 
     def _schedule_deletion(self, file_path: Path):
         """
-        Schedule a file for deletion after 10 seconds.
+        Schedule a file for deletion after a delay.
+        Helps with temporary files for system templates.
         """
-        import threading
+        delay = 60  # 1 minute
 
         def delete_file():
-            time.sleep(10)
             try:
+                time.sleep(delay)
                 if file_path.exists():
                     file_path.unlink()
-            except Exception as e:
-                console.print(
-                    f"[bold red]Error deleting temporary file {file_path}:[/bold red] {e}"
-                )
+            except Exception:
+                pass
 
-        thread = threading.Thread(target=delete_file)
-        thread.daemon = True
-        thread.start()
+        # Start thread to delete file after delay
+        import threading
+
+        threading.Thread(target=delete_file, daemon=True).start()
 
     def interpolate_template_variables(
         self, template_content: str, variables: Dict[str, Any] = None
     ) -> str:
         """
         Interpolate variables in a template.
-
-        Args:
-            template_content: The template content
-            variables: The variables to interpolate (defaults to empty dict)
-
-        Returns:
-            The interpolated template content
         """
         if not variables:
-            variables = {}
+            return template_content
 
-        # Simple variable replacement using string formatting
-        content = template_content
+        result = template_content
 
-        # Find all variables in the format {variable_name}
-        var_pattern = r"\{([a-zA-Z0-9_]+)\}"
-        matches = set(re.findall(var_pattern, content))
+        # Replace variables in format {variable_name}
+        pattern = r"(\{([a-zA-Z0-9_]+)\})"
+        matches = re.findall(pattern, template_content)
 
-        # For each variable, if it's in the provided variables, replace it
-        for var_name in matches:
+        for full_match, var_name in matches:
             if var_name in variables:
-                placeholder = "{" + var_name + "}"
-                content = content.replace(placeholder, str(variables[var_name]))
+                # Convert variable value to string if needed
+                var_value = str(variables[var_name])
+                result = result.replace(full_match, var_value)
 
-        return content
+        return result
 
     def create_template(self, name: str, content: str) -> Path:
         """
-        Create a new template file.
-
-        Args:
-            name: The name of the template
-            content: The content of the template
-
-        Returns:
-            The path to the created template file
+        Create a new template with the given name and content.
+        Returns the path to the new template file.
         """
         # Make sure the templates directory exists
         self.templates_path.mkdir(parents=True, exist_ok=True)
 
-        # Create the template file path
-        if not name.endswith(".yaml"):
-            name = f"{name}.yaml"
+        # Create the template file
+        template_path = self.templates_path / f"{name}.yaml"
 
-        template_path = self.templates_path / name
-
-        # Write the content to the file
-        with open(template_path, "w") as f:
-            f.write(content)
+        # Check if it's already in YAML format, if not wrap it
+        if content.strip().startswith("{") or content.strip().startswith("prompt:"):
+            # Content is already in YAML format
+            template_path.write_text(content)
+        else:
+            # Wrap content in YAML format
+            yaml_content = f"prompt: |\n  {content.replace('\n', '\n  ')}"
+            template_path.write_text(yaml_content)
 
         return template_path
